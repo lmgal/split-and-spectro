@@ -4,7 +4,8 @@ Split an input audio file into n-second samples and optionally generate spectrog
 
 Usage:
     python split_audio.py --input INPUT_FILE --segment-length LENGTH_IN_SECONDS \\
-        --output-dir OUTPUT_DIR [--generate-spectrogram] [--spectrogram-dir SPECTROGRAM_DIR] [--spectrogram-size SIZE]
+        --output-dir OUTPUT_DIR [--generate-spectrogram] [--spectrogram-dir SPECTROGRAM_DIR] [--spectrogram-size SIZE] \\
+        [--grayscale]
 """
 
 import os
@@ -32,6 +33,9 @@ def split_audio(input_file, segment_length, output_dir):
     for i, start in enumerate(range(0, duration_ms, segment_ms)):
         end = min(start + segment_ms, duration_ms)
         segment = audio[start:end]
+        # Exclude segment if it is less than n seconds
+        if len(segment) < segment_length * 1000:
+            continue
         # set output filename with appropriate extension
         out_name = f"{basename}_part{i:04d}.{output_ext}"
         out_path = os.path.join(output_dir, out_name)
@@ -45,7 +49,7 @@ def split_audio(input_file, segment_length, output_dir):
         segments.append(out_path)
     return segments
 
-def generate_spectrogram(audio_file, output_dir, size):
+def generate_spectrogram(audio_file, output_dir, size, grayscale=False):
     import librosa
     import librosa.display
     import matplotlib.pyplot as plt
@@ -55,9 +59,12 @@ def generate_spectrogram(audio_file, output_dir, size):
     D = np.abs(librosa.stft(y))
     DB = librosa.amplitude_to_db(D, ref=np.max)
 
-    # Create a square figure of given size (width and height in inches)
-    plt.figure(figsize=(size, size))
-    librosa.display.specshow(DB, sr=sr, x_axis=None, y_axis=None)
+    # Create a figure with given size in pixels
+    dpi = 100  # Dots per inch
+    figsize = (size / dpi, size / dpi)  # Convert size from pixels to inches
+    plt.figure(figsize=figsize, dpi=dpi)
+    cmap = 'gray' if grayscale else 'viridis'
+    librosa.display.specshow(DB, sr=sr, x_axis=None, y_axis=None, cmap=cmap)
     plt.axis('off')
     plt.tight_layout(pad=0)
     basename, _ = os.path.splitext(os.path.basename(audio_file))
@@ -95,6 +102,10 @@ def main():
         "--spectrogram-size", "-z", type=float, default=16,
         help="Size (in inches) for both width and height of spectrogram figures"
     )
+    parser.add_argument(
+        "--grayscale", "-g", action="store_true",
+        help="Generate grayscale spectrograms"
+    )
 
     args = parser.parse_args()
 
@@ -126,12 +137,12 @@ def main():
                     segments = split_audio(input_path, args.segment_length, out_dir)
                     if args.generate_spectrogram:
                         for seg in segments:
-                            generate_spectrogram(seg, spec_dir, args.spectrogram_size)
+                            generate_spectrogram(seg, spec_dir, args.spectrogram_size, args.grayscale)
     elif os.path.isfile(args.input):
         segments = split_audio(args.input, args.segment_length, args.output_dir)
         if args.generate_spectrogram:
             for seg in segments:
-                generate_spectrogram(seg, args.spectrogram_dir, args.spectrogram_size)
+                generate_spectrogram(seg, args.spectrogram_dir, args.spectrogram_size, args.grayscale)
     else:
         parser.error(f"Input path '{args.input}' is not a file or directory")
 

@@ -4,7 +4,8 @@ Generate spectrograms from input audio samples.
 
 Usage:
     python generate-spectrogram.py --input INPUT_FILE \\
-        --output OUTPUT_DIR [--spectrogram-size SIZE]
+        --output OUTPUT_DIR [--spectrogram-size SIZE] \\
+        [--grayscale]
 """
 
 import os
@@ -12,7 +13,7 @@ import argparse
 
 AUDIO_EXTENSIONS = {'.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.wma', '.mp4'}
 
-def generate_spectrogram(audio_file, output_dir, size):
+def generate_spectrogram(audio_file, output_dir, size, grayscale=False):
     import librosa
     import librosa.display
     import matplotlib.pyplot as plt
@@ -22,9 +23,12 @@ def generate_spectrogram(audio_file, output_dir, size):
     D = np.abs(librosa.stft(y))
     DB = librosa.amplitude_to_db(D, ref=np.max)
 
-    # Create a square figure of given size (width and height in inches)
-    plt.figure(figsize=(size, size))
-    librosa.display.specshow(DB, sr=sr, x_axis=None, y_axis=None)
+    # Create a figure with given size in pixels
+    dpi = 100  # Dots per inch
+    figsize = (size / dpi, size / dpi)  # Convert size from pixels to inches
+    plt.figure(figsize=figsize, dpi=dpi)
+    cmap = 'gray' if grayscale else 'viridis'
+    librosa.display.specshow(DB, sr=sr, x_axis=None, y_axis=None, cmap=cmap)
     plt.axis('off')
     plt.tight_layout(pad=0)
     basename, _ = os.path.splitext(os.path.basename(audio_file))
@@ -50,6 +54,10 @@ def main():
         "--spectrogram-size", "-z", type=float, default=16,
         help="Size (in inches) for both width and height of spectrogram figures"
     )
+    parser.add_argument(
+        "--grayscale", "-g", action="store_true",
+        help="Generate grayscale spectrograms"
+    )
 
     args = parser.parse_args()
 
@@ -67,9 +75,9 @@ def main():
                 ext = os.path.splitext(filename)[1].lower()
                 if ext in AUDIO_EXTENSIONS:
                     input_path = os.path.join(dirpath, filename)
-                    generate_spectrogram(input_path, out_dir, args.spectrogram_size)
+                    generate_spectrogram(input_path, out_dir, args.spectrogram_size, args.grayscale)
     elif os.path.isfile(args.input):
-        generate_spectrogram(args.input, args.output_dir, args.spectrogram_size)
+        generate_spectrogram(args.input, args.output_dir, args.spectrogram_size, args.grayscale)
     else:
         parser.error(f"Input path '{args.input}' is not a file or directory")
 
