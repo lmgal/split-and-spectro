@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Split an input audio file into n-second samples and optionally generate spectrograms.
+Split an input audio file into n-second samples, optionally apply a low-pass filter, and generate spectrograms.
 
 Usage:
     python split_audio.py --input INPUT_FILE --segment-length LENGTH_IN_SECONDS \\
-        --output-dir OUTPUT_DIR [--generate-spectrogram] [--spectrogram-dir SPECTROGRAM_DIR] [--spectrogram-size SIZE] \\
-        [--grayscale]
+        --output-dir OUTPUT_DIR [--low-pass-cutoff CUTOFF] [--generate-spectrogram] [--spectrogram-dir SPECTROGRAM_DIR] \\
+        [--spectrogram-size SIZE] [--grayscale]
 """
 
 import os
@@ -15,7 +15,7 @@ from pydub.utils import which
 
 AUDIO_EXTENSIONS = {'.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.wma', '.mp4'}
 
-def split_audio(input_file, segment_length, output_dir):
+def split_audio(input_file, segment_length, output_dir, low_pass_cutoff=None):
     # Check for ffmpeg (required by pydub)
     if which('ffmpeg') is None and which('ffmpeg.exe') is None:
         print("Warning: ffmpeg not found. Please install ffmpeg and ensure it's in your PATH.")
@@ -25,8 +25,15 @@ def split_audio(input_file, segment_length, output_dir):
     input_ext = ext_with_dot.lstrip('.').lower()
     output_ext = 'wav'
     output_fmt = 'wav'
-    # Load audio with explicit format when necessary
+    # Load audio and apply low-pass filter if requested
     audio = AudioSegment.from_file(input_file)
+    if low_pass_cutoff is not None:
+        try:
+            # low_pass_filter expects cutoff frequency in Hz
+            audio = audio.low_pass_filter(low_pass_cutoff)
+            print(f"Applied low-pass filter ({low_pass_cutoff} Hz) to: {input_file}")
+        except Exception as e:
+            print(f"Warning: failed to apply low-pass filter ({low_pass_cutoff} Hz) to {input_file}: {e}")
     duration_ms = len(audio)
     segment_ms = segment_length * 1000
     segments = []
@@ -40,11 +47,7 @@ def split_audio(input_file, segment_length, output_dir):
         out_name = f"{basename}_part{i:04d}.{output_ext}"
         out_path = os.path.join(output_dir, out_name)
         # export segment with desired format
-        export_kwargs = {"format": output_fmt}
-        # optionally, specify mp3 codec if output is mp3
-        if output_fmt == 'mp3':
-            export_kwargs["codec"] = "libmp3lame"
-        segment.export(out_path, **export_kwargs)
+        segment.set_frame_rate(2205).set_channels(1).export(out_path, format='WAV')
         print(f"Exported audio segment: {out_path}")
         segments.append(out_path)
     return segments
@@ -106,6 +109,10 @@ def main():
         "--grayscale", "-g", action="store_true",
         help="Generate grayscale spectrograms"
     )
+    parser.add_argument(
+        "--low-pass-cutoff", "-f", type=float, default=3000.0,
+        help="Cutoff frequency in Hz for low-pass filtering audio segments (default: 3000 Hz, passes explosion frequencies)"
+    )
 
     args = parser.parse_args()
 
@@ -134,12 +141,14 @@ def main():
                 if ext in AUDIO_EXTENSIONS:
                     input_path = os.path.join(dirpath, filename)
                     print(f"Processing file: {input_path}")
-                    segments = split_audio(input_path, args.segment_length, out_dir)
+                    # split audio with optional low-pass filter
+                    segments = split_audio(input_path, args.segment_length, out_dir, args.low_pass_cutoff)
                     if args.generate_spectrogram:
                         for seg in segments:
                             generate_spectrogram(seg, spec_dir, args.spectrogram_size, args.grayscale)
     elif os.path.isfile(args.input):
-        segments = split_audio(args.input, args.segment_length, args.output_dir)
+        # split audio with optional low-pass filter
+        segments = split_audio(args.input, args.segment_length, args.output_dir, args.low_pass_cutoff)
         if args.generate_spectrogram:
             for seg in segments:
                 generate_spectrogram(seg, args.spectrogram_dir, args.spectrogram_size, args.grayscale)
