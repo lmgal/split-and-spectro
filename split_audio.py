@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-Split an input audio file into n-second samples, optionally apply a low-pass filter, and generate spectrograms.
+Split an input audio file into n-second samples and optionally compute FFTs for each segment.
 
 Usage:
-    python split_audio.py --input INPUT_FILE --segment-length LENGTH_IN_SECONDS \\
-        --output-dir OUTPUT_DIR [--low-pass-cutoff CUTOFF] [--generate-spectrogram] [--spectrogram-dir SPECTROGRAM_DIR] \\
-        [--spectrogram-size SIZE] [--grayscale]
+    python split_audio.py --input INPUT_FILE --segment-length LENGTH_IN_SECONDS \
+        --output-dir OUTPUT_DIR [--fft] [--fft-length FFT_LENGTH] [--fft-dir FFT_OUTPUT_DIR]
 """
 
 import os
 import argparse
+import numpy as np
 from pydub import AudioSegment
 from pydub.utils import which
 
 AUDIO_EXTENSIONS = {'.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.wma', '.mp4'}
 
-def split_audio(input_file, segment_length, output_dir, low_pass_cutoff=None):
+def split_audio(input_file, segment_length, output_dir,
+                compute_fft=False, fft_length=None, fft_dir=None):
     # Check for ffmpeg (required by pydub)
     if which('ffmpeg') is None and which('ffmpeg.exe') is None:
         print("Warning: ffmpeg not found. Please install ffmpeg and ensure it's in your PATH.")
@@ -27,13 +28,6 @@ def split_audio(input_file, segment_length, output_dir, low_pass_cutoff=None):
     output_fmt = 'wav'
     # Load audio and apply low-pass filter if requested
     audio = AudioSegment.from_file(input_file)
-    if low_pass_cutoff is not None:
-        try:
-            # low_pass_filter expects cutoff frequency in Hz
-            audio = audio.low_pass_filter(low_pass_cutoff)
-            print(f"Applied low-pass filter ({low_pass_cutoff} Hz) to: {input_file}")
-        except Exception as e:
-            print(f"Warning: failed to apply low-pass filter ({low_pass_cutoff} Hz) to {input_file}: {e}")
     duration_ms = len(audio)
     segment_ms = segment_length * 1000
     segments = []
@@ -47,39 +41,42 @@ def split_audio(input_file, segment_length, output_dir, low_pass_cutoff=None):
         out_name = f"{basename}_part{i:04d}.{output_ext}"
         out_path = os.path.join(output_dir, out_name)
         # export segment with desired format
-        segment.set_frame_rate(2205).set_channels(1).export(out_path, format='WAV')
+        segment.set_frame_rate(16000).set_channels(1).export(out_path, format='WAV')
         print(f"Exported audio segment: {out_path}")
         segments.append(out_path)
+        # compute FFT if requested
+        if compute_fft:
+            from scipy.fft import rfft
+
+            # prepare FFT output directory and file path
+            if fft_dir is None:
+                raise ValueError("fft_dir must be provided when compute_fft=True")
+            # ensure mono for FFT
+            seg_mono = segment if segment.channels == 1 else segment.set_channels(1)
+            # get sample rate and samples
+            sr = seg_mono.frame_rate
+            samples = np.array(seg_mono.get_array_of_samples())
+            # apply Hamming window
+            window = np.hamming(len(samples))
+            windowed_samples = samples * window
+            # compute real FFT with specified length
+            fft_n = fft_length or len(windowed_samples)
+            # compute FFT 
+            fft_result = rfft(windowed_samples, n=fft_n)
+            complex_magnitude = np.round(np.abs(fft_result), decimals=6)
+            # prepare CSV output
+            base = os.path.splitext(os.path.basename(out_path))[0]
+            csv_name = f"{base}_fft.csv"
+            csv_path = os.path.join(fft_dir, csv_name)
+            # save frequency vs amplitude to CSV
+            # write CSV with header
+            np.savetxt(csv_path, complex_magnitude, delimiter=',', fmt='%.6f', comments='')
+            print(f"Saved FFT CSV: {csv_path}")
     return segments
-
-def generate_spectrogram(audio_file, output_dir, size, grayscale=False):
-    import librosa
-    import librosa.display
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    y, sr = librosa.load(audio_file, sr=None)
-    D = np.abs(librosa.stft(y))
-    DB = librosa.amplitude_to_db(D, ref=np.max)
-
-    # Create a figure with given size in pixels
-    dpi = 100  # Dots per inch
-    figsize = (size / dpi, size / dpi)  # Convert size from pixels to inches
-    plt.figure(figsize=figsize, dpi=dpi)
-    cmap = 'gray' if grayscale else 'viridis'
-    librosa.display.specshow(DB, sr=sr, x_axis=None, y_axis=None, cmap=cmap)
-    plt.axis('off')
-    plt.tight_layout(pad=0)
-    basename, _ = os.path.splitext(os.path.basename(audio_file))
-    spec_path = os.path.join(output_dir, f"{basename}.png")
-    plt.savefig(spec_path, bbox_inches='tight', pad_inches=0)
-    plt.close()
-    print(f"Saved spectrogram: {spec_path}")
-    return spec_path
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Split audio into segments and optionally generate spectrograms."
+        description="Split audio into segments and optionally compute FFT for each segment."
     )
     parser.add_argument(
         "--input", "-i", required=True,
@@ -94,64 +91,73 @@ def main():
         help="Directory where audio segments will be saved"
     )
     parser.add_argument(
-        "--generate-spectrogram", "-s", action="store_true",
-        help="Generate spectrograms for each segment"
+        "--fft", action="store_true",
+        help="Compute FFT for each output segment"
     )
     parser.add_argument(
-        "--spectrogram-dir", "-p",
-        help="Directory where spectrogram images will be saved (required if --generate-spectrogram)"
+        "--fft-length", type=int, default=1023,
+        help="Length of FFT (number of points)"
     )
     parser.add_argument(
-        "--spectrogram-size", "-z", type=float, default=16,
-        help="Size (in inches) for both width and height of spectrogram figures"
-    )
-    parser.add_argument(
-        "--grayscale", "-g", action="store_true",
-        help="Generate grayscale spectrograms"
-    )
-    parser.add_argument(
-        "--low-pass-cutoff", "-f", type=float, default=3000.0,
-        help="Cutoff frequency in Hz for low-pass filtering audio segments (default: 3000 Hz, passes explosion frequencies)"
+        "--fft-dir", help="Directory where FFT CSV files will be saved"
     )
 
     args = parser.parse_args()
-
-    if args.generate_spectrogram and not args.spectrogram_dir:
-        parser.error("--spectrogram-dir is required when --generate-spectrogram is set")
+    # validate FFT options
+    os.makedirs(args.output_dir, exist_ok=True)
+    if args.fft:
+        if not args.fft_dir:
+            parser.error("--fft-dir is required when --fft is specified")
+        if args.fft_length <= 0:
+            parser.error("--fft-length must be a positive integer")
+        os.makedirs(args.fft_dir, exist_ok=True)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    if args.generate_spectrogram:
-        os.makedirs(args.spectrogram_dir, exist_ok=True)
 
     if os.path.isdir(args.input):
         for dirpath, _, filenames in os.walk(args.input):
             rel_dir = os.path.relpath(dirpath, args.input)
+            # prepare output directory for audio segments
             if rel_dir == '.':
                 out_dir = args.output_dir
-                spec_dir = args.spectrogram_dir if args.generate_spectrogram else None
             else:
                 out_dir = os.path.join(args.output_dir, rel_dir)
-                spec_dir = (os.path.join(args.spectrogram_dir, rel_dir)
-                            if args.generate_spectrogram else None)
             os.makedirs(out_dir, exist_ok=True)
-            if args.generate_spectrogram:
-                os.makedirs(spec_dir, exist_ok=True)
+            # prepare FFT output directory if needed (mirror structure)
+            if args.fft:
+                if rel_dir == '.':
+                    fft_subdir = args.fft_dir
+                else:
+                    fft_subdir = os.path.join(args.fft_dir, rel_dir)
+                os.makedirs(fft_subdir, exist_ok=True)
+            else:
+                fft_subdir = None
             for filename in filenames:
                 ext = os.path.splitext(filename)[1].lower()
                 if ext in AUDIO_EXTENSIONS:
                     input_path = os.path.join(dirpath, filename)
                     print(f"Processing file: {input_path}")
-                    # split audio with optional low-pass filter
-                    segments = split_audio(input_path, args.segment_length, out_dir, args.low_pass_cutoff)
-                    if args.generate_spectrogram:
-                        for seg in segments:
-                            generate_spectrogram(seg, spec_dir, args.spectrogram_size, args.grayscale)
+                    # split audio and compute FFT if requested
+                    segments = split_audio(
+                        input_path,
+                        args.segment_length,
+                        out_dir,
+                        compute_fft=args.fft,
+                        fft_length=args.fft_length,
+                        fft_dir=fft_subdir
+                    )
     elif os.path.isfile(args.input):
-        # split audio with optional low-pass filter
-        segments = split_audio(args.input, args.segment_length, args.output_dir, args.low_pass_cutoff)
-        if args.generate_spectrogram:
-            for seg in segments:
-                generate_spectrogram(seg, args.spectrogram_dir, args.spectrogram_size, args.grayscale)
+        # split audio and compute FFT if requested
+        # prepare FFT output directory for single file
+        fft_subdir = args.fft_dir if args.fft else None
+        segments = split_audio(
+            args.input,
+            args.segment_length,
+            args.output_dir,
+            compute_fft=args.fft,
+            fft_length=args.fft_length,
+            fft_dir=fft_subdir
+        )
     else:
         parser.error(f"Input path '{args.input}' is not a file or directory")
 

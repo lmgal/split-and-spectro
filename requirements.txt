@@ -2,3 +2,4 @@ pydub
 librosa
 matplotlib
 numpy
+scipy
